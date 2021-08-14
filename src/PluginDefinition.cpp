@@ -1,6 +1,6 @@
 // This file is the main part of Customize Toolbar, a plugin for Notepad++
 // Copyright (C) 2011-2021 DW-dev (dw-dev@gmx.com)
-// Last Edit - 26 Jul 2021
+// Last Edit - 14 Aug 2021
 
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -60,6 +60,12 @@
 // One line for each custom button: menustring1,menustring2,menustring3,menustring4,standard.bmp,fluentlight.ico,fluentdark.ico
 // The standard.bmp, fluentlight.ico and fluent dark.ico image filenames are optional
 
+// Example debug message:
+//    _stprintf_s(g_debugBuffer, 200, TEXT("value=%i"), value);
+//    MessageBox(nppData._nppHandle, g_debugBuffer, TEXT("Debug"), MB_OK);
+
+// Include files
+
 #include "PluginDefinition.h"
 #include "menuCmdID.h"
 #include "resource.h"
@@ -68,44 +74,48 @@
 #include "Shlwapi.h"
 #include "versionhelpers.h"
 
-
-// Uncomment for debug:
-//    #include <stdio.h>
-//    TCHAR debugBuffer[200];
-
-// Example debug message:
-//    _stprintf_s(debugBuffer, 200, TEXT("value=%i"), value);
-//    MessageBox(nppData._nppHandle, debugBuffer, TEXT("Debug"), MB_OK);
+// Constant definitions
 
 #define IDM_EDIT_TAB2SW (IDM_EDIT + 46)
 #define IDM_EDIT_SW2TAB_ALL (IDM_EDIT + 54)
 #define IDM_FOCUS_ON_FOUND_RESULTS (IDM_SEARCH + 45)
 
 #define ID_PLUGINS_CMD 22000
-#define ID_PLUGINS_CMD_LIMIT 22500
+#define ID_PLUGINS_CMD_LIMIT_OLD 22499  /* 500 plugin buttons (with menu items) - Notepad++ 8.1.2 or earlier */
+#define ID_PLUGINS_CMD_LIMIT_NEW 22999  /* 1000 plugin buttons (with menu items) - Notepad++ 8.1.3 or later */
+
 #define ID_PLUGINS_CMD_DYNAMIC 23000
-#define ID_PLUGINS_CMD_DYNAMIC_LIMIT 25000
+#define ID_PLUGINS_CMD_DYNAMIC_LIMIT 24999  /* 2000 plugin buttons (without menu items) */
 
 #define ID_CMD_CUSTOM 26000
-#define ID_CMD_CUSTOM_LIMIT 26100  /* 100 custom buttons */
-
-#define HASHFLAG 0x80000000
+#define ID_CMD_CUSTOM_LIMIT 26099  /* 100 custom buttons */
 
 #define MAXSIZE 300  /* maximum size of field (menu string or file name) - menu string can contain file name (260) plus a few more characters */
 
+#define HASHFLAG 0x80000000
+
+// Data declarations
+
+TCHAR g_debugBuffer[200];
+
 extern HANDLE g_hModule;
 HMENU g_hMainMenu;
+
 int g_rebarBandInfoSize;
+
+int g_id_plugins_cmd_limit;
 
 WNDPROC g_origWindowProc, g_origRebarProc;
 
-int g_buttonsAvailable;
 TBBUTTON g_tbButtons[300];  /* 300 buttons in total - built-in buttons, plugin buttons, dynamic plugin buttons and custom buttons */
+int g_buttonsAvailable;
 int g_customButtonsState;
 int g_wrapToolbarState;
 
-int g_customButtonsCount;
 TCHAR g_customMenuStrings[100][4][MAXSIZE];  /* 100 custom buttons, 4 menu strings per button */
+int g_customButtonsCount;
+
+// Function declarations
 
 DWORD WINAPI afterNppReadyDelayed(LPVOID lpParam);
 LRESULT APIENTRY subclassRebarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -233,7 +243,14 @@ void addMenuCommands()
     TCHAR datFilePath[MAX_PATH];
     HANDLE datFile;
     DWORD bytesRead;
-    int menuHidden;
+    int version, menuHidden;
+    
+    // Initialize plugin command identifier limit
+    
+    version = (int) SendMessage(nppData._nppHandle, NPPM_GETNPPVERSION, 0, 0);
+    
+    if (HIWORD(version) >= 9 || (HIWORD(version) == 8 && LOWORD(version) >= 13)) g_id_plugins_cmd_limit = ID_PLUGINS_CMD_LIMIT_NEW;
+    else g_id_plugins_cmd_limit = ID_PLUGINS_CMD_LIMIT_OLD;
     
     // Initialize main menu handle
     
@@ -685,7 +702,7 @@ void wrapToolbar()
 void helpOverview()
 {
     MessageBox(nppData._nppHandle, TEXT("Customize Toolbar Plugin\n\n")
-                                   TEXT("Version: 5.1    -    © 2011-2021 DW-dev    -    E-mail: dw-dev@gmx.com\n\n")
+                                   TEXT("Version: 5.2    -    © 2011-2021 DW-dev    -    E-mail: dw-dev@gmx.com\n\n")
                                    TEXT("This plugin allows the Notepad++ toolbar to be fully customised by the user, and includes twenty-six additional buttons for frequently used menu commands.\n\n")
                                    TEXT("All buttons on the toolbar can be customized, whether Notepad++ built-in buttons, the additional buttons, or buttons belonging to other plugins.\n\n")
                                    TEXT("When this plugin is first installed, the additional buttons are not shown on the toolbar, but are available in the Customize Toolbar dialog box.\n\n")
@@ -729,11 +746,12 @@ void helpCustomButtons()
 void resourceUsage()
 {
     TCHAR buffer[100];
-    int commands;
+    int commands, maxcommands;
     
     commands = funcItem[8]._cmdID-ID_PLUGINS_CMD+1;
+    maxcommands = g_id_plugins_cmd_limit-ID_PLUGINS_CMD+1;
     
-    _stprintf_s(buffer, 100, TEXT("Total Buttons:  %i / 300\n\nCustom Buttons:  %i / 100\n\nPlugin Menu Commands:  %i / 500\n"), g_buttonsAvailable, g_customButtonsCount, commands);
+    _stprintf_s(buffer, 100, TEXT("Total Buttons:  %i / 300\n\nCustom Buttons:  %i / 100\n\nPlugin Menu Commands:  %i / %i\n"), g_buttonsAvailable, g_customButtonsCount, commands, maxcommands);
     
     MessageBox(nppData._nppHandle, buffer, TEXT("Customize Toolbar - Resource Usage"), MB_OK | MB_APPLMODAL);
 }
@@ -1009,7 +1027,7 @@ void preserveToolbarButtons()
     {
         SendMessage(tbWindow, TB_GETBUTTON, (WPARAM) i, (LPARAM)(LPTBBUTTON) &g_tbButtons[i]);
         
-        if (g_tbButtons[i].idCommand < ID_CMD_CUSTOM || g_tbButtons[i].idCommand >= ID_CMD_CUSTOM_LIMIT)
+        if (g_tbButtons[i].idCommand < ID_CMD_CUSTOM || g_tbButtons[i].idCommand > ID_CMD_CUSTOM_LIMIT)
         {
             GetMenuString(g_hMainMenu, g_tbButtons[i].idCommand, buffer, MAXSIZE, MF_BYCOMMAND);
             stripMenuString(buffer);
@@ -1047,7 +1065,7 @@ void preserveToolbarButtons()
     
     for (i = 0; i < g_buttonsAvailable; i++)
     {
-        if (g_tbButtons[i].idCommand >= ID_PLUGINS_CMD && g_tbButtons[i].idCommand < ID_PLUGINS_CMD_LIMIT)  /* plugin command (with menu item) */
+        if (g_tbButtons[i].idCommand >= ID_PLUGINS_CMD && g_tbButtons[i].idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
         {
             GetMenuString(g_hMainMenu, g_tbButtons[i].idCommand, buffer, MAXSIZE, MF_BYCOMMAND);
             if (_tcsncmp(buffer, TEXT("WebEdit - "), 10) == 0)
@@ -1065,7 +1083,7 @@ void preserveToolbarButtons()
     scriptCount = 1;
     for (i = 0; i < g_buttonsAvailable; i++)
     {
-        if (g_tbButtons[i].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[i].idCommand < ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
+        if (g_tbButtons[i].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[i].idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
         {
             GetMenuString(g_hMainMenu, g_tbButtons[i].idCommand, buffer, MAXSIZE, MF_BYCOMMAND);
             if (buffer[0] == 0)
@@ -1099,7 +1117,7 @@ void updateToolbarState()
         menuState = GetMenuState(g_hMainMenu, tbButton.idCommand, MF_BYCOMMAND);
         if (menuState == -1) menuState = 0;  /* no menu associated with button (e.g. Python Script command button) */
         tbState = 0;
-        if (tbButton.idCommand < ID_CMD_CUSTOM || tbButton.idCommand >= ID_CMD_CUSTOM_LIMIT)
+        if (tbButton.idCommand < ID_CMD_CUSTOM || tbButton.idCommand > ID_CMD_CUSTOM_LIMIT)
         {
             if (menuState & MF_CHECKED) tbState |= TBSTATE_CHECKED;
             if (!(menuState & (MF_DISABLED | MF_GRAYED))) tbState |= TBSTATE_ENABLED;
@@ -1200,17 +1218,17 @@ void saveToolbarLayout()
     for (i = 0; i < buttonsOnToolbar; i++)
     {
         SendMessage(tbWindow, TB_GETBUTTON, (WPARAM) i, (LPARAM)(LPTBBUTTON) &tbButton);
-        if (tbButton.idCommand >= ID_PLUGINS_CMD && tbButton.idCommand < ID_PLUGINS_CMD_LIMIT)  /* plugin command (with menu item) */
+        if (tbButton.idCommand >= ID_PLUGINS_CMD && tbButton.idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
         {
             dword = calcPluginButtonMenuHash(tbButton);
             WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
         }
-        else if (tbButton.idCommand >= ID_PLUGINS_CMD_DYNAMIC && tbButton.idCommand < ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
+        else if (tbButton.idCommand >= ID_PLUGINS_CMD_DYNAMIC && tbButton.idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
         {
             dword = calcButtonStringHash(tbButton);
             WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
         }
-        else if (tbButton.idCommand >= ID_CMD_CUSTOM && tbButton.idCommand < ID_CMD_CUSTOM_LIMIT)  /* custom command (menu strings not found) */
+        else if (tbButton.idCommand >= ID_CMD_CUSTOM && tbButton.idCommand <= ID_CMD_CUSTOM_LIMIT)  /* custom command (menu strings not found) */
         {
             dword = calcButtonStringHash(tbButton);
             WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
@@ -1226,17 +1244,17 @@ void saveToolbarLayout()
     
     for (j = 0; j < g_buttonsAvailable; j++)
     {
-        if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand < ID_PLUGINS_CMD_LIMIT)  /* plugin command (with menu item) */
+        if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
         {
             dword = calcPluginButtonMenuHash(g_tbButtons[j]);
             WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
         }
-        else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand < ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
+        else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
         {
             dword = calcButtonStringHash(g_tbButtons[j]);
             WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
         }
-        else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand < ID_CMD_CUSTOM_LIMIT)  /* custom command (menu strings not found) */
+        else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand <= ID_CMD_CUSTOM_LIMIT)  /* custom command (menu strings not found) */
         {
             dword = calcButtonStringHash(g_tbButtons[j]);
             WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
@@ -1322,7 +1340,7 @@ void restoreToolbarLayout(bool menuStates)
         {
             for (j = 0; j < g_buttonsAvailable; j++)
             {
-                if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand < ID_PLUGINS_CMD_LIMIT)  /* plugin command (with menu item) */
+                if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
                 {
                     if (dword == calcPluginButtonMenuHash(g_tbButtons[j]))
                     {
@@ -1330,7 +1348,7 @@ void restoreToolbarLayout(bool menuStates)
                         break;
                     }
                 }
-                else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand < ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
+                else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
                 {
                     if (dword == calcButtonStringHash(g_tbButtons[j]))
                     {
@@ -1338,7 +1356,7 @@ void restoreToolbarLayout(bool menuStates)
                         break;
                     }
                 }
-                else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand < ID_CMD_CUSTOM_LIMIT)  /* plugin command (menu strings not found) */
+                else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand <= ID_CMD_CUSTOM_LIMIT)  /* plugin command (menu strings not found) */
                 {
                     if (dword == calcButtonStringHash(g_tbButtons[j]))
                     {
@@ -1375,7 +1393,7 @@ void restoreToolbarLayout(bool menuStates)
         {
             for (j = 0; j < g_buttonsAvailable; j++)
             {
-                if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand < ID_PLUGINS_CMD_LIMIT)  /* plugin command (with menu item) */
+                if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
                 {
                     if (dword == calcPluginButtonMenuHash(g_tbButtons[j]))
                     {
@@ -1383,7 +1401,7 @@ void restoreToolbarLayout(bool menuStates)
                         break;
                     }
                 }
-                else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand < ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
+                else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
                 {
                     if (dword == calcButtonStringHash(g_tbButtons[j]))
                     {
@@ -1391,7 +1409,7 @@ void restoreToolbarLayout(bool menuStates)
                         break;
                     }
                 }
-                else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand < ID_CMD_CUSTOM_LIMIT)  /* plugin command (menu strings not found) */
+                else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand <= ID_CMD_CUSTOM_LIMIT)  /* plugin command (menu strings not found) */
                 {
                     if (dword == calcButtonStringHash(g_tbButtons[j]))
                     {

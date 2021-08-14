@@ -3,7 +3,7 @@
 
 // Modifications to this file for Customize Toolbar plugin
 // Copyright (C) 2011-2021 DW-dev (dw-dev@gmx.com)
-// Last Edit - 26 Jul 2021
+// Last Edit - 02 Jul 2021
 
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
