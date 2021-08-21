@@ -1,6 +1,6 @@
 // This file is the main part of Customize Toolbar, a plugin for Notepad++
 // Copyright (C) 2011-2021 DW-dev (dw-dev@gmx.com)
-// Last Edit - 14 Aug 2021
+// Last Edit - 21 Aug 2021
 
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -42,7 +42,7 @@
 // repeat for each button available                 ........
 // wrap toolbar menu item state (2.0)               00000000 or 01000000
 //
-// Versions 3.0-5.1
+// Versions 3.0-5.3
 // custom buttons menu item state                   00000000 or 01000000
 // wrap toolbar menu item state                     00000000 or 01000000
 // number of buttons on toolbar                     XX000000
@@ -57,8 +57,11 @@
 
 // CustomizeToolbar.btn File Format - for custom buttons
 // 
-// One line for each custom button: menustring1,menustring2,menustring3,menustring4,standard.bmp,fluentlight.ico,fluentdark.ico
-// The standard.bmp, fluentlight.ico and fluent dark.ico image filenames are optional
+// Each line is either a semi-colon followed by a comment or a custom button definition:
+// menustring1,menustring2,menustring3,menustring4,standard.bmp,fluentlight.ico,fluentdark.ico
+// The standard.bmp, fluentlight.ico and fluentdark.ico image file names are optional
+// With Notepad++ 7.9.5 or earlier, the fluent light and fluent dark fields are ignored
+// With Notepad++ 8.0 or later, the fluent dark field if omitted defaults to the fluent light field
 
 // Example debug message:
 //    _stprintf_s(g_debugBuffer, 200, TEXT("value=%i"), value);
@@ -101,9 +104,9 @@ TCHAR g_debugBuffer[200];
 extern HANDLE g_hModule;
 HMENU g_hMainMenu;
 
-int g_rebarBandInfoSize;
-
+int g_nppVersion;
 int g_id_plugins_cmd_limit;
+int g_rebarBandInfoSize;
 
 WNDPROC g_origWindowProc, g_origRebarProc;
 
@@ -117,6 +120,7 @@ int g_customButtonsCount;
 
 // Function declarations
 
+void addAdditionalButton(int bitmapName, int iconName, int idCmd);
 DWORD WINAPI afterNppReadyDelayed(LPVOID lpParam);
 LRESULT APIENTRY subclassRebarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 LRESULT APIENTRY subclassWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -243,13 +247,15 @@ void addMenuCommands()
     TCHAR datFilePath[MAX_PATH];
     HANDLE datFile;
     DWORD bytesRead;
-    int version, menuHidden;
+    int menuHidden;
+    
+    // Initialize Notepad++ version number
+    
+    g_nppVersion = (int) SendMessage(nppData._nppHandle, NPPM_GETNPPVERSION, 0, 0);
     
     // Initialize plugin command identifier limit
     
-    version = (int) SendMessage(nppData._nppHandle, NPPM_GETNPPVERSION, 0, 0);
-    
-    if (HIWORD(version) >= 9 || (HIWORD(version) == 8 && LOWORD(version) >= 13)) g_id_plugins_cmd_limit = ID_PLUGINS_CMD_LIMIT_NEW;
+    if (HIWORD(g_nppVersion) >= 9 || (HIWORD(g_nppVersion) == 8 && LOWORD(g_nppVersion) >= 13)) g_id_plugins_cmd_limit = ID_PLUGINS_CMD_LIMIT_NEW;
     else g_id_plugins_cmd_limit = ID_PLUGINS_CMD_LIMIT_OLD;
     
     // Initialize main menu handle
@@ -279,162 +285,59 @@ void addMenuCommands()
 
 void addToolbarButtons()
 {
-    toolbarIconsWithDarkMode buttonIcon;
     TCHAR configPath[MAX_PATH];
     TCHAR btnFilePath[MAX_PATH];
     TCHAR bmpFilePath[MAX_PATH], icoFilePath[MAX_PATH], icodarkFilePath[MAX_PATH];
     HANDLE btnFile, bmpFile, icoFile, icodarkFile;
-    DWORD bytesRead;
     TCHAR nextChar;
+    DWORD bytesRead;
     TCHAR buffer[MAXSIZE*7+10];  /* custom button definition - 4 menu strings, 3 file names, plus added commas */
     TCHAR bmpFileName[MAXSIZE], icoFileName[MAXSIZE], icodarkFileName[MAXSIZE];
+    HBITMAP hToolbarBmp;
+    HICON hToolbarIcon, hToolbarIconDarkMode;
+    toolbarIcons buttonIcon;
+    toolbarIconsWithDarkMode buttonIconDM;
     bool bmpError, icoError, icodarkError;
     int i, j;
     
     // Add twenty-six additional buttons onto toolbar for Notepad++ built-in commands
     
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_FILE_CLOSEALLBUT), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_FILE_CLOSEALLBUT), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_FILE_CLOSEALL_BUT_CURRENT, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_EDIT_DELETE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_EDIT_DELETE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_DELETE, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_INDENT_DECREASE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_INDENT_DECREASE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_RMV_TAB, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_INDENT_INCREASE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_INDENT_INCREASE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_INS_TAB, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_LINE_DUPLICATE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_LINE_DUPLICATE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_DUP_LINE, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_COMMENT_SET), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_COMMENT_SET), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_BLOCK_COMMENT_SET, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_COMMENT_CLEAR), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_COMMENT_CLEAR), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_BLOCK_UNCOMMENT, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_AUTO_WORDCOMPLETE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_AUTO_WORDCOMPLETE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_AUTOCOMPLETE_CURRENTFILE, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_BLANK_TRIMTRAILING), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_BLANK_TRIMTRAILING), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_TRIMTRAILING, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_BLANK_TABTOSPACE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_BLANK_TABTOSPACE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_TAB2SW, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_BLANK_SPACETOTAB), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_BLANK_SPACETOTAB), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_EDIT_SW2TAB_ALL, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_SEARCH_FINDINFILES), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_SEARCH_FINDINFILES), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_SEARCH_FINDINFILES, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_SEARCH_FINDPREV), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_SEARCH_FINDPREV), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_SEARCH_FINDPREV, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_SEARCH_FINDNEXT), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_SEARCH_FINDNEXT), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_SEARCH_FINDNEXT, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_SEARCH_INCREMENTAL), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_SEARCH_INCREMENTAL), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_SEARCH_FINDINCREMENT, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_SEARCH_RESULTS), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_SEARCH_RESULTS), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_FOCUS_ON_FOUND_RESULTS, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_SEARCH_GOTO), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_SEARCH_GOTO), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_SEARCH_GOTOLINE, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_BOOKMARK_PREV), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_BOOKMARK_PREV), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_SEARCH_PREV_BOOKMARK, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_BOOKMARK_NEXT), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_BOOKMARK_NEXT), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_SEARCH_NEXT_BOOKMARK, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_BOOKMARK_CLEAR), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_BOOKMARK_CLEAR), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_SEARCH_CLEAR_BOOKMARKS, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_ZOOM_RESTORE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_ZOOM_RESTORE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_VIEW_ZOOMRESTORE, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_MOVE_MOVETOOTHER), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_MOVE_MOVETOOTHER), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_VIEW_GOTO_ANOTHER_VIEW, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_CLONE_CLONETOOTHER), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_CLONE_CLONETOOTHER), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_VIEW_CLONE_TO_ANOTHER_VIEW, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_VIEW_HIDELINES), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_VIEW_HIDELINES), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_VIEW_HIDELINES, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_VIEW_FOLDALL), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_VIEW_FOLDALL), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_VIEW_TOGGLE_FOLDALL, (LPARAM) &buttonIcon);
-    
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_VIEW_UNFOLDALL), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_VIEW_UNFOLDALL), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) IDM_VIEW_TOGGLE_UNFOLDALL, (LPARAM) &buttonIcon);
+    addAdditionalButton(IDB_FILE_CLOSEALLBUT, IDI_FILE_CLOSEALLBUT, IDM_FILE_CLOSEALL_BUT_CURRENT);
+    addAdditionalButton(IDB_EDIT_DELETE, IDI_EDIT_DELETE, IDM_EDIT_DELETE);
+    addAdditionalButton(IDB_INDENT_DECREASE, IDI_INDENT_DECREASE, IDM_EDIT_RMV_TAB);
+    addAdditionalButton(IDB_INDENT_INCREASE, IDI_INDENT_INCREASE, IDM_EDIT_INS_TAB);
+    addAdditionalButton(IDB_LINE_DUPLICATE, IDI_LINE_DUPLICATE, IDM_EDIT_DUP_LINE);
+    addAdditionalButton(IDB_COMMENT_SET, IDI_COMMENT_SET, IDM_EDIT_BLOCK_COMMENT_SET);
+    addAdditionalButton(IDB_COMMENT_CLEAR, IDI_COMMENT_CLEAR, IDM_EDIT_BLOCK_UNCOMMENT);
+    addAdditionalButton(IDB_AUTO_WORDCOMPLETE, IDI_AUTO_WORDCOMPLETE, IDM_EDIT_AUTOCOMPLETE_CURRENTFILE);
+    addAdditionalButton(IDB_BLANK_TRIMTRAILING, IDI_BLANK_TRIMTRAILING, IDM_EDIT_TRIMTRAILING);
+    addAdditionalButton(IDB_BLANK_TABTOSPACE, IDI_BLANK_TABTOSPACE, IDM_EDIT_TAB2SW);
+    addAdditionalButton(IDB_BLANK_SPACETOTAB, IDI_BLANK_SPACETOTAB, IDM_EDIT_SW2TAB_ALL);
+    addAdditionalButton(IDB_SEARCH_FINDINFILES, IDI_SEARCH_FINDINFILES, IDM_SEARCH_FINDINFILES);
+    addAdditionalButton(IDB_SEARCH_FINDPREV, IDI_SEARCH_FINDPREV, IDM_SEARCH_FINDPREV);
+    addAdditionalButton(IDB_SEARCH_FINDNEXT, IDI_SEARCH_FINDNEXT, IDM_SEARCH_FINDNEXT);
+    addAdditionalButton(IDB_SEARCH_INCREMENTAL, IDI_SEARCH_INCREMENTAL, IDM_SEARCH_FINDINCREMENT);
+    addAdditionalButton(IDB_SEARCH_RESULTS, IDI_SEARCH_RESULTS, IDM_FOCUS_ON_FOUND_RESULTS);
+    addAdditionalButton(IDB_SEARCH_GOTO, IDI_SEARCH_GOTO, IDM_SEARCH_GOTOLINE);
+    addAdditionalButton(IDB_BOOKMARK_PREV, IDI_BOOKMARK_PREV, IDM_SEARCH_PREV_BOOKMARK);
+    addAdditionalButton(IDB_BOOKMARK_NEXT, IDI_BOOKMARK_NEXT, IDM_SEARCH_NEXT_BOOKMARK);
+    addAdditionalButton(IDB_BOOKMARK_CLEAR, IDI_BOOKMARK_CLEAR, IDM_SEARCH_CLEAR_BOOKMARKS);
+    addAdditionalButton(IDB_ZOOM_RESTORE, IDI_ZOOM_RESTORE, IDM_VIEW_ZOOMRESTORE);
+    addAdditionalButton(IDB_MOVE_MOVETOOTHER, IDI_MOVE_MOVETOOTHER, IDM_VIEW_GOTO_ANOTHER_VIEW);
+    addAdditionalButton(IDB_CLONE_CLONETOOTHER, IDI_CLONE_CLONETOOTHER, IDM_VIEW_CLONE_TO_ANOTHER_VIEW);
+    addAdditionalButton(IDB_VIEW_HIDELINES, IDI_VIEW_HIDELINES, IDM_VIEW_HIDELINES);
+    addAdditionalButton(IDB_VIEW_FOLDALL, IDI_VIEW_FOLDALL, IDM_VIEW_TOGGLE_FOLDALL);
+    addAdditionalButton(IDB_VIEW_UNFOLDALL, IDI_VIEW_UNFOLDALL, IDM_VIEW_TOGGLE_UNFOLDALL);
     
     // Add customize toolbar button onto toolbar
     
-    buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_CUSTOMIZE_TOOLBAR), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_CUSTOMIZE_TOOLBAR), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
-    buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-    SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) funcItem[0]._cmdID, (LPARAM) &buttonIcon);
+    addAdditionalButton(IDB_CUSTOMIZE_TOOLBAR, IDI_CUSTOMIZE_TOOLBAR, funcItem[0]._cmdID);
     
     if (!g_customButtonsState) return;
     
-    g_customButtonsCount = 0;
-    
     // Add custom buttons onto toolbar for Notepad++ built-in commands or plugin commands (with temporary custom command identifiers)
+    
+    g_customButtonsCount = 0;
     
     SendMessage(nppData._nppHandle, NPPM_GETPLUGINSCONFIGDIR, MAX_PATH, (LPARAM) configPath);
     
@@ -462,7 +365,7 @@ void addToolbarButtons()
         buffer[i] = buffer[i+1] = buffer[i+2] = buffer[i+3] = buffer[i+4] = buffer[i+5] = buffer[i+6] = TCHAR(',');
         buffer[i+7] = 0;
         
-        if (i > 0 && buffer[0] != (TCHAR) ';')  /* buffer not empty and does not contain comment */
+        if (i > 0 && buffer[0] != (TCHAR) ';')  /* buffer is not empty and does not contain comment */
         {
             for (i = 0, j = 0; j < MAXSIZE-1 && buffer[i] != (TCHAR) ','; i++, j++) g_customMenuStrings[g_customButtonsCount][0][j] = buffer[i];
             g_customMenuStrings[g_customButtonsCount][0][j] = 0;
@@ -481,7 +384,7 @@ void addToolbarButtons()
             
             bmpError = icoError = icodarkError = false;
             
-            if (bmpFileName[0] == (TCHAR) '*') buttonIcon.hToolbarBmp = createBitmapForCustomButton(bmpFileName);
+            if (bmpFileName[0] == (TCHAR) '*') hToolbarBmp = createBitmapForCustomButton(bmpFileName);
             else
             {
                 lstrcpy(bmpFilePath, configPath);
@@ -490,11 +393,11 @@ void addToolbarButtons()
                 bmpFile = CreateFile(bmpFilePath, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
                 CloseHandle(bmpFile);
                 bmpError = (bmpFile == INVALID_HANDLE_VALUE || GetLastError() == ERROR_FILE_NOT_FOUND);
-                if (!bmpError) buttonIcon.hToolbarBmp = (HBITMAP) LoadImage(NULL, bmpFilePath, IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS | LR_LOADFROMFILE));
-                else buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_CUSTOM_MISSINGFILE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
+                if (!bmpError) hToolbarBmp = (HBITMAP) LoadImage(NULL, bmpFilePath, IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS | LR_LOADFROMFILE));
+                else hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDB_CUSTOM_MISSINGFILE), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
             }
             
-            if (icoFileName[0] == (TCHAR) '*') buttonIcon.hToolbarIcon = createIconForCustomButton(icoFileName);
+            if (icoFileName[0] == (TCHAR) '*') hToolbarIcon = createIconForCustomButton(icoFileName);
             else
             {
                 lstrcpy(icoFilePath, configPath);
@@ -503,11 +406,11 @@ void addToolbarButtons()
                 icoFile = CreateFile(icoFilePath, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
                 CloseHandle(icoFile);
                 icoError = (icoFile == INVALID_HANDLE_VALUE || GetLastError() == ERROR_FILE_NOT_FOUND);
-                if (!icoError) buttonIcon.hToolbarIcon = (HICON) LoadImage(NULL, icoFilePath, IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS | LR_LOADFROMFILE));
-                else buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_CUSTOM_MISSINGFILE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
+                if (!icoError) hToolbarIcon = (HICON) LoadImage(NULL, icoFilePath, IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS | LR_LOADFROMFILE));
+                else hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_CUSTOM_MISSINGFILE), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
             }
             
-            if (icodarkFileName[0] == (TCHAR) '*') buttonIcon.hToolbarIconDarkMode = createIconForCustomButton(icodarkFileName);
+            if (icodarkFileName[0] == (TCHAR) '*') hToolbarIconDarkMode = createIconForCustomButton(icodarkFileName);
             else
             {
                 lstrcpy(icodarkFilePath, configPath);
@@ -516,15 +419,28 @@ void addToolbarButtons()
                 icodarkFile = CreateFile(icodarkFilePath, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
                 CloseHandle(icodarkFile);
                 icodarkError = (icodarkFile == INVALID_HANDLE_VALUE || GetLastError() == ERROR_FILE_NOT_FOUND);
-                if (!icodarkError) buttonIcon.hToolbarIconDarkMode = (HICON) LoadImage(NULL, icodarkFilePath, IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS | LR_LOADFROMFILE));
+                if (!icodarkError) hToolbarIconDarkMode = (HICON) LoadImage(NULL, icodarkFilePath, IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS | LR_LOADFROMFILE));
                 else
                 {
-                    if (!icoError) buttonIcon.hToolbarIconDarkMode = buttonIcon.hToolbarIcon;
-                    else buttonIcon.hToolbarIconDarkMode = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_CUSTOM_MISSINGFILE), IMAGE_ICON, 0, 0,(LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
+                    if (!icoError) hToolbarIconDarkMode = hToolbarIcon;
+                    else hToolbarIconDarkMode = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(IDI_CUSTOM_MISSINGFILE), IMAGE_ICON, 0, 0,(LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
                 }
             }
             
-            SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) (ID_CMD_CUSTOM+g_customButtonsCount), (LPARAM) &buttonIcon);
+            if (HIWORD(g_nppVersion) < 8)  /* Notepad++ <= 7.9.5 */
+            {
+                buttonIcon.hToolbarBmp = hToolbarBmp;
+                buttonIcon.hToolbarIcon = hToolbarIcon;
+                /* Note: buttonIcon.hToolbarIcon is ignored by Notepad++ <= 7.9.5 */
+                SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_DEPRECATED, (WPARAM) (ID_CMD_CUSTOM+g_customButtonsCount), (LPARAM) &buttonIcon);
+            }
+            else  /* Notepad++ >= 8.0 */
+            {
+                buttonIconDM.hToolbarBmp = hToolbarBmp;
+                buttonIconDM.hToolbarIcon = hToolbarIcon;
+                buttonIconDM.hToolbarIconDarkMode = hToolbarIconDarkMode;
+                SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) (ID_CMD_CUSTOM+g_customButtonsCount), (LPARAM) &buttonIconDM);
+            }
             
             g_customButtonsCount++;
         }
@@ -533,6 +449,27 @@ void addToolbarButtons()
     }
     
     CloseHandle(btnFile);
+}
+
+void addAdditionalButton(int bitmapName, int iconName, int idCmd)
+{
+    toolbarIcons buttonIcon;
+    toolbarIconsWithDarkMode buttonIconDM;
+    
+    if (HIWORD(g_nppVersion) < 8)  /* Notepad++ <= 7.9.5 */
+    {
+        buttonIcon.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(bitmapName), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
+        buttonIcon.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(iconName), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
+        /* Note: buttonIcon.hToolbarIcon is ignored by Notepad++ <= 7.9.5 */
+        SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_DEPRECATED, (WPARAM) idCmd, (LPARAM) &buttonIcon);
+    }
+    else  /* Notepad++ >= 8.0 */
+    {
+        buttonIconDM.hToolbarBmp = (HBITMAP) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(bitmapName), IMAGE_BITMAP, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
+        buttonIconDM.hToolbarIcon = (HICON) LoadImage((HINSTANCE) g_hModule, MAKEINTRESOURCE(iconName), IMAGE_ICON, 0, 0, (LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADMAP3DCOLORS));
+        buttonIconDM.hToolbarIconDarkMode = buttonIconDM.hToolbarIcon;
+        SendMessage(nppData._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE, (WPARAM) idCmd, (LPARAM) &buttonIconDM);
+    }
 }
 
 void afterNppReady()
@@ -651,7 +588,8 @@ void customButtons()
                         TEXT(";Plugins,Compare,Navigation Bar,,standard-3.bmp,fluentlight-3.ico,fluentdark-3.ico\r\n\r\n")
                         TEXT(";or using quick codes:\r\n\r\n")
                         TEXT(";Plugins,Compare,Navigation Bar,,*#309030:NB,*#309030:NB\r\n\r\n")
-                        TEXT(";Note, in all cases the fluent dark field can be omitted and falls back to the fluent light field.\r\n");
+                        TEXT(";With Notepad++ 7.9.5 or earlier, the fluent light and fluent dark fields are ignored.\r\n\r\n")
+                        TEXT(";With Notepad++ 8.0 or later, the fluent dark field if omitted defaults to the fluent light field.\r\n");
     
     g_customButtonsState = !g_customButtonsState;
     
@@ -702,7 +640,7 @@ void wrapToolbar()
 void helpOverview()
 {
     MessageBox(nppData._nppHandle, TEXT("Customize Toolbar Plugin\n\n")
-                                   TEXT("Version: 5.2    -    © 2011-2021 DW-dev    -    E-mail: dw-dev@gmx.com\n\n")
+                                   TEXT("Version: 5.3    -    © 2011-2021 DW-dev    -    E-mail: dw-dev@gmx.com\n\n")
                                    TEXT("This plugin allows the Notepad++ toolbar to be fully customised by the user, and includes twenty-six additional buttons for frequently used menu commands.\n\n")
                                    TEXT("All buttons on the toolbar can be customized, whether Notepad++ built-in buttons, the additional buttons, or buttons belonging to other plugins.\n\n")
                                    TEXT("When this plugin is first installed, the additional buttons are not shown on the toolbar, but are available in the Customize Toolbar dialog box.\n\n")
