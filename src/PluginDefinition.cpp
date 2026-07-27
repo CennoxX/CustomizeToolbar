@@ -694,7 +694,7 @@ void wrapToolbar()
 void helpOverview()
 {
     MessageBox(nppData._nppHandle, TEXT("Customize Toolbar Plugin\n\n")
-                                   TEXT("Version: 5.3    -    � 2011-2021 DW-dev    -    E-mail: dw-dev@gmx.com\n\n")
+                                   TEXT("Version: 5.4    -    � 2011-2021 DW-dev    -    E-mail: dw-dev@gmx.com\n\n")
                                    TEXT("This plugin allows the Notepad++ toolbar to be fully customised by the user, and includes twenty-six additional buttons for frequently used menu commands.\n\n")
                                    TEXT("All buttons on the toolbar can be customized, whether Notepad++ built-in buttons, the additional buttons, or buttons belonging to other plugins.\n\n")
                                    TEXT("When this plugin is first installed, the additional buttons are not shown on the toolbar, but are available in the Customize Toolbar dialog box.\n\n")
