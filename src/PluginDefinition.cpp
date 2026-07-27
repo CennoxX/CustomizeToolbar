@@ -31,6 +31,22 @@
 //  - sends TB_SETMAXTEXTROWS message to force toolbar to refresh and display buttons
 //  - hashes menu string and parent menu string to uniquely identify button
 
+// Changes in Version 5.4 - hidden buttons no longer reappear after restart
+//
+//  - identity hashes are calculated once at startup, not again at shutdown when the menus may have been changed
+//  - command identifiers are saved alongside the hashes, and used to match buttons whose menu string has changed
+//
+// A button is identified by hashing its menu string and its parent menu string. Menu strings are not
+// stable: Notepad++ translates plugin menu items shortly after the plugin has added its toolbar
+// buttons, so a button can be seen with its untranslated string in one session and its translated
+// string in the next. The hash then matches nothing, and the button is put onto the toolbar as though
+// it belonged to a newly installed plugin, undoing the user hiding it. Matching on the command
+// identifier when the hash does not match covers that case.
+//
+// Everything else is unchanged from version 5.3. In particular, a button that cannot be matched at
+// all is still put onto the toolbar, and the deferred work is still carried out by unsynchronised
+// threads after a delay of 10 milliseconds.
+
 // CustomizeToolbar.dat File Format - for toolbar layout
 //
 // Versions 1.2-2.0
@@ -54,6 +70,22 @@
 // line number margin button state (3.10-4.2)       00000000 or 01000000
 // bookmark margin button state (3.10-4.2)          00000000 or 01000000
 // folder margin button state (3.10-4.2)            00000000 or 01000000
+//
+// Version 5.3.1 - file format version 6
+// magic number ("CTBT")                            43544254
+// file format version                              06000000
+// custom buttons menu item state                   00000000 or 01000000
+// wrap toolbar menu item state                     00000000 or 01000000
+// number of buttons on toolbar                     XX000000
+// number of buttons available                      XX000000
+// first button on toolbar (cmdid or menuhash)      XXXX0000 or XXXXXXXX
+// first button on toolbar (cmdid)                  XXXX0000
+// repeat for each button on toolbar                ........
+// first button available (cmdid or menuhash)       XXXX0000 or XXXXXXXX
+// first button available (cmdid)                   XXXX0000
+// repeat for each button available                 ........
+//
+// Files written by earlier versions are still read - they hold one value per button rather than two
 
 // CustomizeToolbar.btn File Format - for custom buttons
 // 
@@ -96,6 +128,16 @@
 #define MAXSIZE 300  /* maximum size of field (menu string or file name) - menu string can contain file name (260) plus a few more characters */
 
 #define HASHFLAG 0x80000000
+#define HASHEMPTY 0x80000000  /* hash of empty menu strings - the button could not be identified */
+
+// CustomizeToolbar.dat file format version 6 - see the file format notes at the top of this file
+//
+// Each button entry is written as an identity hash followed by a command identifier, so that a
+// button can still be matched when its menu string has changed. The magic number distinguishes the
+// new format from earlier ones, whose first value is the custom buttons menu item state (0 or 1).
+
+#define DATFILE_MAGIC 0x54425443
+#define DATFILE_VERSION 6
 
 // Data declarations
 
@@ -111,6 +153,15 @@ int g_rebarBandInfoSize;
 WNDPROC g_origWindowProc, g_origRebarProc;
 
 TBBUTTON g_tbButtons[300];  /* 300 buttons in total - built-in buttons, plugin buttons, dynamic plugin buttons and custom buttons */
+
+// Identity hash for each preserved button, calculated once at startup by preserveToolbarButtons.
+//
+// The hashes are not recalculated when the toolbar layout is saved. Saving happens at shutdown,
+// by which time other plugins may have removed or renamed the menu items that their buttons are
+// identified by, which would write hashes that cannot be matched in the next session.
+
+DWORD g_tbButtonHash[300];
+
 int g_buttonsAvailable;
 int g_customButtonsState;
 int g_wrapToolbarState;
@@ -141,6 +192,9 @@ HBITMAP createBitmapForCustomButton(TCHAR text[]);
 HICON createIconForCustomButton(TCHAR text[]);
 DWORD calcButtonStringHash(TBBUTTON tbButton);
 DWORD calcPluginButtonMenuHash(TBBUTTON tbButton);
+DWORD calcButtonIdentity(TBBUTTON tbButton);
+DWORD getButtonIdentity(TBBUTTON tbButton);
+int findPreservedButton(DWORD identity, DWORD idCommand, bool claimed[]);
 int findPluginParentMenuString(HMENU hMenu, UINT idCommand, LPTSTR lpString, int maxCount);
 int findCmdIDForMenuStrings(HMENU hMenu0, LPTSTR menuString0, LPTSTR menuString1, LPTSTR menuString2, LPTSTR menuString3);
 void stripMenuString(LPTSTR lpString);
@@ -483,9 +537,9 @@ DWORD WINAPI afterNppReadyDelayed(LPVOID lpParam)
     TCHAR configPath[MAX_PATH];
     TCHAR datFilePath[MAX_PATH];
     HANDLE datFile;
-    
+
     Sleep(10);  /* allow time for other plugins to create additional menu items */
-    
+
     rbWindow = FindWindowEx(nppData._nppHandle, NULL, REBARCLASSNAME, NULL);
     tbWindow = FindWindowEx(rbWindow, NULL, TOOLBARCLASSNAME, NULL);
     
@@ -545,7 +599,7 @@ DWORD WINAPI afterNppReadyDelayed(LPVOID lpParam)
     
     if (g_wrapToolbarState) makeToolbarWrap();
     else makeToolbarOverflow();
-    
+
     return 0;
 }
 
@@ -640,7 +694,7 @@ void wrapToolbar()
 void helpOverview()
 {
     MessageBox(nppData._nppHandle, TEXT("Customize Toolbar Plugin\n\n")
-                                   TEXT("Version: 5.3    -    © 2011-2021 DW-dev    -    E-mail: dw-dev@gmx.com\n\n")
+                                   TEXT("Version: 5.3    -    ï¿½ 2011-2021 DW-dev    -    E-mail: dw-dev@gmx.com\n\n")
                                    TEXT("This plugin allows the Notepad++ toolbar to be fully customised by the user, and includes twenty-six additional buttons for frequently used menu commands.\n\n")
                                    TEXT("All buttons on the toolbar can be customized, whether Notepad++ built-in buttons, the additional buttons, or buttons belonging to other plugins.\n\n")
                                    TEXT("When this plugin is first installed, the additional buttons are not shown on the toolbar, but are available in the Customize Toolbar dialog box.\n\n")
@@ -816,9 +870,9 @@ LRESULT APIENTRY subclassWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM 
                 else makeToolbarOverflow();
                 
                 // Update toolbar button states after toolbar clicked
-                
+
                 CreateThread(NULL, 0, handleButtonStates, NULL, 0, NULL);
-                
+
                 break;
         }
     }
@@ -829,9 +883,9 @@ LRESULT APIENTRY subclassWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM 
     {
         CreateThread(NULL, 0, handleWindowResize, NULL, 0, NULL);
     }
-    
+
     // Handle update of button states after menu command selected
-    
+
     if (uMsg == WM_UNINITMENUPOPUP)
     {
         CreateThread(NULL, 0, handleButtonStates, NULL, 0, NULL);
@@ -862,49 +916,49 @@ LRESULT APIENTRY subclassRebarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM l
 DWORD WINAPI handleWindowResize(LPVOID lpParam)
 {
     Sleep(10);
-    
+
     // Restore toolbar wrap state and display styles
-    
+
     if (g_wrapToolbarState) makeToolbarWrap();
     else makeToolbarOverflow();
-    
+
     return 0;
 }
 
 DWORD WINAPI handleChangedIcons(LPVOID lpParam)
 {
     Sleep(10);
-    
+
     // Replace temporary custom command identifiers with actual command identifiers
-    
+
     replaceTemporaryCmdIDs();
-    
+
     // Preserve initial toolbar buttons
-    
+
     preserveToolbarButtons();
-    
+
     // Restore toolbar layout
-    
+
     restoreToolbarLayout(false);
     updateToolbarState();
     adjustIdealSize();
-    
+
     // Restore toolbar wrap state and display styles
-    
+
     if (g_wrapToolbarState) makeToolbarWrap();
     else makeToolbarOverflow();
-    
+
     return 0;
 }
 
 DWORD WINAPI handleButtonStates(LPVOID lpParam)
 {
     Sleep(10);
-    
+
     // Update toolbar button states after toolbar is clicked or menu item is seleceted
-    
+
     updateToolbarState();
-    
+
     return 0;
 }
 
@@ -960,7 +1014,7 @@ void preserveToolbarButtons()
     g_buttonsAvailable = (int) SendMessage(tbWindow, TB_BUTTONCOUNT, (WPARAM) 0, (LPARAM) 0);
     
     // Preserve startup toolbar button information (for reset and save/restore)
-    
+
     for (i = 0; i < g_buttonsAvailable; i++)
     {
         SendMessage(tbWindow, TB_GETBUTTON, (WPARAM) i, (LPARAM)(LPTBBUTTON) &g_tbButtons[i]);
@@ -1035,6 +1089,15 @@ void preserveToolbarButtons()
                 g_tbButtons[i].iString = SendMessage(tbWindow, TB_ADDSTRING, 0, (LPARAM) buffer);
             }
         }
+    }
+
+    // Calculate the identity hash for each button, now that the menu strings and the button strings
+    // are final. These hashes are used both to save and to restore the toolbar layout, so that the
+    // state of the menus at shutdown cannot affect how the buttons are identified.
+
+    for (i = 0; i < g_buttonsAvailable; i++)
+    {
+        g_tbButtonHash[i] = calcButtonIdentity(g_tbButtons[i]);
     }
 }
 
@@ -1131,9 +1194,16 @@ void saveToolbarLayout()
     lstrcat(datFilePath, TEXT("\\CustomizeToolbar.dat"));
     
     // Create and open .dat file
-    
+
     datFile = CreateFile(datFilePath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    
+
+    // Write file format magic number and version
+
+    dword = DATFILE_MAGIC;
+    WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
+    dword = DATFILE_VERSION;
+    WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
+
     // Write custom buttons menu item state
     
     WriteFile(datFile, &g_customButtonsState, sizeof(int), &bytesWritten, NULL);
@@ -1152,58 +1222,32 @@ void saveToolbarLayout()
     WriteFile(datFile, &g_buttonsAvailable, sizeof(int), &bytesWritten, NULL);
     
     // Write entry for each button on toolbar (currently)
-    
+    //
+    // Each entry is the identity hash calculated at startup, followed by the command identifier, so
+    // that a button whose menu string has since changed can still be matched in the next session
+
     for (i = 0; i < buttonsOnToolbar; i++)
     {
         SendMessage(tbWindow, TB_GETBUTTON, (WPARAM) i, (LPARAM)(LPTBBUTTON) &tbButton);
-        if (tbButton.idCommand >= ID_PLUGINS_CMD && tbButton.idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
-        {
-            dword = calcPluginButtonMenuHash(tbButton);
-            WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
-        }
-        else if (tbButton.idCommand >= ID_PLUGINS_CMD_DYNAMIC && tbButton.idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
-        {
-            dword = calcButtonStringHash(tbButton);
-            WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
-        }
-        else if (tbButton.idCommand >= ID_CMD_CUSTOM && tbButton.idCommand <= ID_CMD_CUSTOM_LIMIT)  /* custom command (menu strings not found) */
-        {
-            dword = calcButtonStringHash(tbButton);
-            WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
-        }
-        else  /* built-in command or separator */
-        {
-            dword = tbButton.idCommand;
-            WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
-        }
+
+        dword = getButtonIdentity(tbButton);
+        WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
+
+        dword = (DWORD) tbButton.idCommand;
+        WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
     }
-    
+
     // Write entry for each button available (at startup)
-    
+
     for (j = 0; j < g_buttonsAvailable; j++)
     {
-        if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
-        {
-            dword = calcPluginButtonMenuHash(g_tbButtons[j]);
-            WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
-        }
-        else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
-        {
-            dword = calcButtonStringHash(g_tbButtons[j]);
-            WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
-        }
-        else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand <= ID_CMD_CUSTOM_LIMIT)  /* custom command (menu strings not found) */
-        {
-            dword = calcButtonStringHash(g_tbButtons[j]);
-            WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
-        }
-        else  /* built-in command or separator */
-        {
-            dword = g_tbButtons[j].idCommand;
-            WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
-        }
+        dword = g_tbButtonHash[j];
+        WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
+
+        dword = (DWORD) g_tbButtons[j].idCommand;
+        WriteFile(datFile, &dword, sizeof(DWORD), &bytesWritten, NULL);
     }
-    
+
     // Close .dat file
     
     CloseHandle(datFile);
@@ -1216,28 +1260,47 @@ void restoreToolbarLayout(bool menuStates)
     TCHAR datFilePath[MAX_PATH];
     HANDLE datFile;
     DWORD bytesRead;
-    DWORD dword;
+    DWORD dword, identity, idCommand;
+    bool newFormat;
     int i, j, buttonsAvailable, buttonsOnToolbar;
-    
+
     rbWindow = FindWindowEx(nppData._nppHandle, NULL, REBARCLASSNAME, NULL);
     tbWindow = FindWindowEx(rbWindow, NULL, TOOLBARCLASSNAME, NULL);
-    
+
     // Get plugins config directory
-    
+
     SendMessage(nppData._nppHandle, NPPM_GETPLUGINSCONFIGDIR, MAX_PATH, (LPARAM) configPath);
-    
+
     // Initialise .dat file path
-    
+
     lstrcpy(datFilePath, configPath);
     lstrcat(datFilePath, TEXT("\\CustomizeToolbar.dat"));
-    
+
     // Open .dat file
-    
+
     datFile = CreateFile(datFilePath, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    
+
+    // Read file format magic number, if present
+    //
+    // Files written by version 5.3 and earlier begin with the custom buttons menu item state, and
+    // hold one value per button entry instead of two
+
+    ReadFile(datFile, &dword, sizeof(DWORD), &bytesRead, NULL);
+
+    newFormat = (bytesRead == sizeof(DWORD) && dword == DATFILE_MAGIC);
+
+    if (newFormat)
+    {
+        ReadFile(datFile, &dword, sizeof(DWORD), &bytesRead, NULL);  /* file format version - only version 6 exists */
+        ReadFile(datFile, &i, sizeof(int), &bytesRead, NULL);
+    }
+    else
+    {
+        i = (int) dword;  /* value already read is the custom buttons menu item state */
+    }
+
     // Read custom buttons menu item state
-    
-    ReadFile(datFile, &i, sizeof(int), &bytesRead, NULL);
+
     if (menuStates)
     {
         g_customButtonsState = i;
@@ -1270,111 +1333,61 @@ void restoreToolbarLayout(bool menuStates)
     ReadFile(datFile, &buttonsAvailable, sizeof(int), &bytesRead, NULL);
     
     // Read entry for each button on toolbar (in last session)
-    
+    //
+    // Each button is matched on its identity hash, and failing that on its command identifier
+
     for (i = 0; i < buttonsOnToolbar; i++)
     {
-        ReadFile(datFile, &dword, sizeof(DWORD), &bytesRead, NULL);
-        if (dword & HASHFLAG)  /* plugin command */
+        ReadFile(datFile, &identity, sizeof(DWORD), &bytesRead, NULL);
+
+        idCommand = 0;
+        if (newFormat) ReadFile(datFile, &idCommand, sizeof(DWORD), &bytesRead, NULL);
+
+        j = findPreservedButton(identity, idCommand, NULL);
+
+        if (j != -1)
         {
-            for (j = 0; j < g_buttonsAvailable; j++)
-            {
-                if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
-                {
-                    if (dword == calcPluginButtonMenuHash(g_tbButtons[j]))
-                    {
-                        SendMessage(tbWindow, TB_ADDBUTTONS, (WPARAM)(UINT) 1, (LPARAM)(LPTBBUTTON) &g_tbButtons[j]);
-                        break;
-                    }
-                }
-                else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
-                {
-                    if (dword == calcButtonStringHash(g_tbButtons[j]))
-                    {
-                        SendMessage(tbWindow, TB_ADDBUTTONS, (WPARAM)(UINT) 1, (LPARAM)(LPTBBUTTON) &g_tbButtons[j]);
-                        break;
-                    }
-                }
-                else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand <= ID_CMD_CUSTOM_LIMIT)  /* plugin command (menu strings not found) */
-                {
-                    if (dword == calcButtonStringHash(g_tbButtons[j]))
-                    {
-                        SendMessage(tbWindow, TB_ADDBUTTONS, (WPARAM)(UINT) 1, (LPARAM)(LPTBBUTTON) &g_tbButtons[j]);
-                        break;
-                    }
-                }
-            }
-        }
-        else  /* built-in command or separator */
-        {
-            for (j = 0; j < g_buttonsAvailable; j++)
-            {
-                if (dword == g_tbButtons[j].idCommand)
-                {
-                    SendMessage(tbWindow, TB_ADDBUTTONS, (WPARAM)(UINT) 1, (LPARAM)(LPTBBUTTON) &g_tbButtons[j]);
-                    break;  /* to avoid multiple separators being restored */
-                }
-            }
+            SendMessage(tbWindow, TB_ADDBUTTONS, (WPARAM)(UINT) 1, (LPARAM)(LPTBBUTTON) &g_tbButtons[j]);
         }
     }
     
     // Read entry for each button available (in last session)
-    
+    //
+    // Any button that is not listed is assumed to belong to a newly installed plugin, and is put
+    // onto the toolbar
+
     for (j = 0; j < g_buttonsAvailable; j++)
     {
         g_tbButtons[j].dwData = 1;
     }
-    
+
     for (i = 0; i < buttonsAvailable; i++)
     {
-        ReadFile(datFile, &dword, sizeof(DWORD), &bytesRead, NULL);
-        if (dword & HASHFLAG)  /* plugin command */
+        ReadFile(datFile, &identity, sizeof(DWORD), &bytesRead, NULL);
+
+        idCommand = 0;
+        if (newFormat) ReadFile(datFile, &idCommand, sizeof(DWORD), &bytesRead, NULL);
+
+        if (identity == 0)  /* separator - clear the flag on all of them, not just the first */
         {
             for (j = 0; j < g_buttonsAvailable; j++)
             {
-                if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD && g_tbButtons[j].idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
-                {
-                    if (dword == calcPluginButtonMenuHash(g_tbButtons[j]))
-                    {
-                        g_tbButtons[j].dwData = 0;
-                        break;
-                    }
-                }
-                else if (g_tbButtons[j].idCommand >= ID_PLUGINS_CMD_DYNAMIC && g_tbButtons[j].idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
-                {
-                    if (dword == calcButtonStringHash(g_tbButtons[j]))
-                    {
-                        g_tbButtons[j].dwData = 0;
-                        break;
-                    }
-                }
-                else if (g_tbButtons[j].idCommand >= ID_CMD_CUSTOM && g_tbButtons[j].idCommand <= ID_CMD_CUSTOM_LIMIT)  /* plugin command (menu strings not found) */
-                {
-                    if (dword == calcButtonStringHash(g_tbButtons[j]))
-                    {
-                        g_tbButtons[j].dwData = 0;
-                        break;
-                    }
-                }
+                if (g_tbButtons[j].idCommand == 0) g_tbButtons[j].dwData = 0;
             }
         }
-        else  /* built-in command or separator */
+        else
         {
-            for (j = 0; j < g_buttonsAvailable; j++)
-            {
-                if (dword == g_tbButtons[j].idCommand)
-                {
-                    g_tbButtons[j].dwData = 0;
-                    //break;   /* no break to ensure all separators have dwData flag cleared */
-                }
-            }
+            j = findPreservedButton(identity, idCommand, NULL);
+            if (j != -1) g_tbButtons[j].dwData = 0;
         }
     }
-    
+
     for (j = 0; j < g_buttonsAvailable; j++)
     {
         if (g_tbButtons[j].dwData == 1)
         {
             g_tbButtons[j].dwData = 0;
+
             SendMessage(tbWindow, TB_ADDBUTTONS, (WPARAM)(UINT) 1, (LPARAM)(LPTBBUTTON) &g_tbButtons[j]);
         }
     }
@@ -1617,6 +1630,68 @@ DWORD calcPluginButtonMenuHash(TBBUTTON tbButton)
     hash |= HASHFLAG;  /* distinguish hash value from command identifier */
     
     return hash;
+}
+
+DWORD calcButtonIdentity(TBBUTTON tbButton)
+{
+    if (tbButton.idCommand >= ID_PLUGINS_CMD && tbButton.idCommand <= g_id_plugins_cmd_limit)  /* plugin command (with menu item) */
+        return calcPluginButtonMenuHash(tbButton);
+
+    if (tbButton.idCommand >= ID_PLUGINS_CMD_DYNAMIC && tbButton.idCommand <= ID_PLUGINS_CMD_DYNAMIC_LIMIT)  /* plugin command (without menu item) (from NPPM_ALLOCATECMDID) */
+        return calcButtonStringHash(tbButton);
+
+    if (tbButton.idCommand >= ID_CMD_CUSTOM && tbButton.idCommand <= ID_CMD_CUSTOM_LIMIT)  /* custom command (menu strings not found) */
+        return calcButtonStringHash(tbButton);
+
+    return tbButton.idCommand;  /* built-in command or separator */
+}
+
+DWORD getButtonIdentity(TBBUTTON tbButton)
+{
+    int j;
+
+    // Use the hash calculated at startup, when the menus were complete
+
+    for (j = 0; j < g_buttonsAvailable; j++)
+    {
+        if (g_tbButtons[j].idCommand == tbButton.idCommand) return g_tbButtonHash[j];
+    }
+
+    // Button was not on the toolbar when the buttons were preserved
+
+    return calcButtonIdentity(tbButton);
+}
+
+int findPreservedButton(DWORD identity, DWORD idCommand, bool claimed[])
+{
+    int j;
+
+    // Match on the identity hash, which survives other plugins being installed or removed
+
+    if (identity != HASHEMPTY)
+    {
+        for (j = 0; j < g_buttonsAvailable; j++)
+        {
+            if (claimed != NULL && claimed[j]) continue;
+            if (identity == g_tbButtonHash[j]) return j;
+        }
+    }
+
+    // Otherwise match on the command identifier, which survives a plugin renaming, translating or
+    // removing the menu item that its button is identified by. Command identifiers are allocated in
+    // plugin load order, so they only hold while the installed plugins are unchanged, which is why
+    // this is tried second rather than first.
+
+    if (idCommand != 0)
+    {
+        for (j = 0; j < g_buttonsAvailable; j++)
+        {
+            if (claimed != NULL && claimed[j]) continue;
+            if (idCommand == (DWORD) g_tbButtons[j].idCommand) return j;
+        }
+    }
+
+    return -1;  /* button not available in this session */
 }
 
 int findPluginParentMenuString(HMENU hMenu, UINT idCommand, LPTSTR lpString, int maxCount)
